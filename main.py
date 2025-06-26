@@ -147,6 +147,18 @@ def search_and_click_on_hotel(driver):
         print(f'❌ Error: {e}')
         return False
 
+def calculate_dates():
+    start_date = datetime.now().date()
+    end_date = start_date + timedelta(days=30)
+    dates = []
+    current_date = start_date
+    while current_date <= end_date:
+        checkin_date = current_date
+        checkout_date = current_date + timedelta(days=1)
+        dates.append((checkin_date, checkout_date))
+        current_date += timedelta(days=1)
+    return dates
+
 def select_date(driver):
     try:
         print('🔍 Selecting date...')
@@ -256,6 +268,10 @@ def scrape_booking_com(max_retries=3):
                 print('✅ Hotel search and selection completed')
                 driver.save_screenshot("hotel_selected.png")
                 print('📸 Screenshot saved')
+
+            dates = calculate_dates()
+            for date in dates:
+                print(f"Checking date: {date[0]} - Checkout date: {date[1]}")
 
             # select date
             if not select_date(driver):
