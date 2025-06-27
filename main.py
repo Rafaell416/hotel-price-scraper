@@ -4,15 +4,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
-from urllib3.util.retry import Retry
-from requests.adapters import HTTPAdapter
-import requests
 import time
 import os
 from datetime import datetime, timedelta
-import pytz
 from dotenv import load_dotenv
-import urllib3.exceptions
+import json
 
 load_dotenv()
 
@@ -98,6 +94,8 @@ def search_and_click_on_hotel(driver):
     try:
         print('🔍 Looking for search input...')
         wait = WebDriverWait(driver, 15)
+
+        # Find the search input
         search_input = wait.until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='ss']"))
         )
@@ -105,13 +103,32 @@ def search_and_click_on_hotel(driver):
         print('✨ Found search input, entering text...')
         search_text = "Loft 32 Medellin Living"
         
-        # Clear and enter text
+        # Clear the field completely using multiple methods
         search_input.clear()
+        time.sleep(0.5)
+        
+        # Use JavaScript to clear and set the value to ensure it's completely clean
+        driver.execute_script("arguments[0].value = '';", search_input)
+        time.sleep(0.5)
+        
+        # Now enter the text
         search_input.send_keys(search_text)
+        time.sleep(1)
         
         # Verify text entry
         actual_value = search_input.get_attribute('value')
         print(f'📝 Text in input field: {actual_value}')
+        
+        # Verify the text is exactly what we expect
+        if actual_value != search_text:
+            print(f'⚠️ Text mismatch! Expected: "{search_text}", Got: "{actual_value}"')
+            # Try to clear and re-enter
+            driver.execute_script("arguments[0].value = '';", search_input)
+            time.sleep(0.5)
+            search_input.send_keys(search_text)
+            time.sleep(1)
+            actual_value = search_input.get_attribute('value')
+            print(f'📝 After retry, text in input field: {actual_value}')
         
         print('🔄 Waiting for autocomplete results...')
         # Wait for autocomplete list to appear
@@ -137,7 +154,6 @@ def search_and_click_on_hotel(driver):
                 print(f'🎯 Found exact match: {option.text}')
                 option.click()
                 print('✅ Selected hotel from autocomplete')
-                # driver.save_screenshot("selected_hotel.png")
                 return True
         
         print('⚠️ Hotel not found in autocomplete results')
@@ -159,38 +175,58 @@ def calculate_dates():
         current_date += timedelta(days=1)
     return dates
 
-def select_date(driver):
+def open_date_picker(driver):
+    """Open the date picker"""
     try:
-        print('🔍 Selecting date...')
-        start_date = datetime.now().date()
-        end_date = start_date + timedelta(days=30)
-        dates = []
+        print('🔍 Opening date picker...')
+        date_picker_button = driver.find_element(By.CSS_SELECTOR, "[data-testid='searchbox-dates-container']")
+        date_picker_button.click()
+        time.sleep(1)
+        return True
+    except Exception as e:  
+        print(f"Error: {e}")
+        return False
 
-        current_date = start_date
-
-        iterations = 0
-        while current_date <= end_date:
-            checkin_date = current_date
-            checkout_date = current_date + timedelta(days=1)
-            print(f"Checking date: {checkin_date} - Checkout date: {checkout_date}")
-            dates.append((checkin_date, checkout_date))
-
-            if iterations > 1:
-                print(f"Clicking on calendar input before finding the date")
-                # click on calendar input before finding the date
-                pass
-            
-            # find the date
-            checkin_date_element = driver.find_element(By.CSS_SELECTOR, f"span[data-date='{checkin_date}']")
-            checkin_date_element.click()
-            checkout_date_element = driver.find_element(By.CSS_SELECTOR, f"span[data-date='{checkout_date}']")
-            checkout_date_element.click()
-
-            current_date += timedelta(days=1)
-            iterations += 1
-            print(dates)
+def is_date_picker_open(driver):
+    """Check if the date picker is open and visible"""
+    try:
+        print('🔍 Checking if date picker is open...')
+        
+        date_picker = driver.find_element(By.CSS_SELECTOR, "[data-testid='searchbox-datepicker-calendar']")
+        
+        if date_picker.is_displayed():
+            print('✅ Date picker is open')
             return True
+        else:
+            print('❌ Date picker is not visible')
+            return False
+            
+    except:
+        print('❌ Date picker is not open')
+        return False
 
+def select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
+    """Select check-in and check-out dates"""
+    try:
+        print(f'📅 Selecting dates: {checkin_date} to {checkout_date}')
+        # check if date picker is open
+        if not is_date_picker_open(driver):
+            print('❌ Date picker is not open')
+            if not open_date_picker(driver):
+                print('❌ Could not open date picker')
+                return False
+            else:
+                print('✅ Date picker opened')
+                time.sleep(1)
+        else:
+            time.sleep(1)
+        # select checkin date
+        checkin_date_element = driver.find_element(By.CSS_SELECTOR, f"span[data-date='{checkin_date}']")
+        checkin_date_element.click()
+        # select checkout date
+        checkout_date_element = driver.find_element(By.CSS_SELECTOR, f"span[data-date='{checkout_date}']")
+        checkout_date_element.click()
+        return True
     except Exception as e:
         print(f"Error: {e}")
         return False
@@ -218,103 +254,153 @@ def extract_price(driver):
         print(f"Error: {e}")
         return False
 
-def scrape_booking_com(max_retries=3):
-    success = False
-    
-    for attempt in range(max_retries):
-        driver = None
-        try:
-            print(f'\n🚀 Starting attempt {attempt + 1}/{max_retries}')
-            
-            # Create new driver session
-            driver = create_driver_session()
-            print('🔗 Connected successfully to Bright Data')
-            
-            # Load Booking.com
-            print('🌐 Loading Booking.com...')
-            driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
+def save_results(results, filename='hotel_prices.json'):
+    """Save results to JSON file"""
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        print(f'💾 Results saved to {filename}')
+    except Exception as e:
+        print(f'❌ Error saving results: {str(e)}')
 
-            # Wait for page load
-            if not wait_for_page_load(driver):
-                raise Exception("Page did not load completely")
-            
-            print('📄 Page loaded, waiting for stability...')
-            time.sleep(5)
-            
-            # Check if modal is present before trying to close it
-            print('🔍 Checking if modal is present...')
-            try:
-                modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
-                if modal.is_displayed():
-                    print('🎯 Modal found, attempting to close...')
-                    if close_modal(driver):
-                        print('🎉 Modal closed successfully!')
-                    else:
-                        print('⚠️ Failed to close modal')
-                        continue  # Try again
-                else:
-                    print('ℹ️ Modal exists but not visible, continuing...')
-            except:
-                print('✅ No modal present, continuing...')
+def scrape_hotel_prices_from_booking_com():
+    """Main function to scrape prices for multiple dates"""
 
-            print('🎉 Page ready!')
-            driver.save_screenshot("page_ready.png")
+    dates_list = calculate_dates()
+    results = []
 
-            # search and click on hotel
-            if not search_and_click_on_hotel(driver):
-                print('⚠️ Could not complete hotel search and selection')
-                return False
-            else:
-                print('✅ Hotel search and selection completed')
-                driver.save_screenshot("hotel_selected.png")
-                print('📸 Screenshot saved')
+    if not dates_list:
+        print('❌ No dates to process')
+        return results
 
-            dates = calculate_dates()
-            for date in dates:
-                print(f"Checking date: {date[0]} - Checkout date: {date[1]}")
-
-            # select date
-            if not select_date(driver):
-                print('⚠️ Could not complete date selection')
-                return False
-            else:
-                print('✅ Date selection completed')
-                driver.save_screenshot("date_selected.png")
-                print('📸 Screenshot saved')
-
-            # click on search button
-            if not click_on_search_button(driver):
-                print('⚠️ Could not complete search button click')
-                return False
-            else:
-                print('✅ Search button clicked')
-                driver.save_screenshot("search_results.png")
-
-            # extract price
-            if not extract_price(driver):
-                print('⚠️ Could not extract price')
-                return False
-            else:
-                print('✅ Price extracted')
-                success = True
-                break
-                
-        except Exception as e:
-            print(f'❌ Error on attempt {attempt + 1}: {str(e)}')
-            
-        finally:
-            if driver:
-                print('👋 Closing browser session...')
-                driver.quit()
+    driver = None
+    try:
+        print(f'\n🚀 Starting hotel prices scraper script...')
         
-        if not success and attempt < max_retries - 1:
-            print(f'🔄 Retrying in 5 seconds... ({attempt + 2}/{max_retries} attempts remaining)')
-            time.sleep(5)
+        # Create new driver session
+        driver = create_driver_session()
+        print('🔗 Connected successfully to Bright Data')
+        
+        # Load Booking.com
+        print('🌐 Loading Booking.com...')
+        driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
+
+        # Wait for page load
+        if not wait_for_page_load(driver):
+            raise Exception("Page did not load completely")
+        
+        print('📄 Page loaded, waiting for stability...')
+        time.sleep(5)
+        
+        # Check if modal is present before trying to close it
+        print('🔍 Checking if modal is present...')
+        try:
+            modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
+            if modal.is_displayed():
+                print('🎯 Modal found, attempting to close...')
+                if close_modal(driver):
+                    print('🎉 Modal closed successfully!')
+                else:
+                    print('⚠️ Failed to close modal')
+            else:
+                print('ℹ️ Modal exists but not visible, continuing...')
+        except:
+            print('✅ No modal present, continuing...')
+
+        print('🎉 Page ready!')
+
+        for i, (checkin_date, checkout_date) in enumerate(dates_list):
+            try:
+                print(f"Processing date {i+1}/{len(dates_list)}: {checkin_date} - {checkout_date}")
+
+                # Step 1: search and click on hotel
+                if not search_and_click_on_hotel(driver):
+                    print(f'⚠️ Could not complete hotel search and selection for date {i+1}/{len(dates_list)}')
+                    results.append({
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Failed to search for hotel'
+                    })
+                    driver.save_screenshot(f"hotel_search_failed_{i+1}.png")
+                    continue
+                else:
+                    print(f'✅ Hotel search and selection completed for date {i+1}/{len(dates_list)}')
+
+                # Step 2: select dates
+                if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
+                    print(f'⚠️ Could not complete date selection for date {i+1}/{len(dates_list)}')
+                    results.append({
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Failed to select date'
+                    })
+                    continue
+                else:
+                    print(f'✅ Date selection completed for date {i+1}/{len(dates_list)}')
+
+                # Step 3: click on search button
+                if not click_on_search_button(driver):
+                    print(f'⚠️ Could not complete search button click for date {i+1}/{len(dates_list)}')
+                    results.append({
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Failed to click on search button'
+                    })
+                    continue
+                else:
+                    print(f'✅ Search button clicked for date {i+1}/{len(dates_list)}')
+
+                # Step 4: extract price
+                print(f'🔍 Extracting price for date {i+1}/{len(dates_list)}')
+                price = extract_price(driver)
+                print(f'💵 Price: {price}')
+                results.append({
+                    'checkin': str(checkin_date),
+                    'checkout': str(checkout_date),
+                    'price': price,
+                    'error': None if price else 'Failed to extract price'
+                })
+
+                print(f'✅ Completed: {checkin_date} to {checkout_date} - Price: {price}')
+
+                # Wait between searches to avoid rate limiting
+                if i < len(dates_list) - 1:  # Don't wait after last iteration
+                    print('⏸️ Waiting before next search...')
+                    time.sleep(3)
+
+            except Exception as e:
+                print(f"Error on loop processing date {i+1}/{len(dates_list)}: {str(e)}")
+            
+    except Exception as e:
+        print(f'❌ Error on function: {str(e)}')
+        
+    finally:
+        if driver:
+            print('👋 Closing browser session...')
+            driver.quit()
     
-    return success
+    return results
 
 if __name__ == "__main__":
-    if scrape_booking_com():
+    results = scrape_hotel_prices_from_booking_com()
+    if results:
+        save_results(results)
+        # Print summary
+        print(f'\n📊 Summary:')
+        print(f'Total dates processed: {len(results)}')
+        successful = len([r for r in results if r['price'] is not None])
+        print(f'Successful extractions: {successful}')
+        print(f'Failed extractions: {len(results) - successful}')
+
+        # Print results
+        print(f'\n📋 Results:')
+        for result in results:
+            status = '✅' if result['price'] else '❌'
+            print(f'{status} {result["checkin"]} to {result["checkout"]}: {result["price"] or result["error"]}')
+
         print('\n✅ Script completed successfully')
     else:
         print('\n❌ Script failed to complete')
