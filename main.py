@@ -208,12 +208,12 @@ def select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
         print(f'📅 Selecting dates: {checkin_date} to {checkout_date}')
         # check if date picker is open
         if not is_date_picker_open(driver):
-            print('❌ Date picker is not open')
+            print('👎🏾 Date picker is not open')
             if not open_date_picker(driver):
-                print('❌ Could not open date picker')
+                print('👎🏾 Could not open date picker')
                 return False
             else:
-                print('✅ Date picker opened')
+                print('👍🏾 Date picker opened')
                 time.sleep(1)
         else:
             time.sleep(1)
@@ -527,7 +527,7 @@ def scrape_hotel_prices_from_booking_com():
                 if i < len(dates_list) - 1:  # Don't wait after last iteration
                     print('⏸️ Waiting before next search...')
                     time.sleep(3)
-            print_separator()
+                print_separator()
             except Exception as e:
                 print(f"Error on loop processing date {i+1}/{len(dates_list)}: {str(e)}")
             
