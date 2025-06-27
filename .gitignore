@@ -95,5 +95,5 @@ temp/
 # MacOS
 .DS_Store
 
-.png
-.json
+*.png
+*.json
