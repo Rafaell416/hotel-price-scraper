@@ -394,6 +394,41 @@ def print_separator():
 ------------------------------------------------------------------------------------------------
     ''')
 
+def load_hotel_names(filename='hotel_names.json'):
+    """Load hotel names from JSON file with object structure"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            hotel_objects = data['hotels']
+        
+        # Extract hotel names from objects
+        valid_hotels = []
+        for hotel_obj in hotel_objects:
+            if isinstance(hotel_obj, dict) and 'name' in hotel_obj:
+                hotel_name = hotel_obj['name']
+                if hotel_name and isinstance(hotel_name, str) and hotel_name.strip():
+                    valid_hotels.append(hotel_name.strip())
+                else:
+                    print(f'⚠️ Skipping invalid hotel name: "{hotel_name}"')
+            else:
+                print(f'⚠️ Skipping invalid hotel object: {hotel_obj}')
+        
+        print(f'📋 Loaded {len(valid_hotels)} hotels from {filename}')
+        for i, hotel in enumerate(valid_hotels, 1):
+            print(f'   {i}. {hotel}')
+        
+        return valid_hotels
+        
+    except FileNotFoundError:
+        print(f'❌ File {filename} not found')
+        return []
+    except KeyError as e:
+        print(f'❌ Missing key in JSON structure: {e}')
+        return []
+    except Exception as e:
+        print(f'❌ Error loading hotels: {e}')
+        return []
+
 def scrape_hotel_prices_from_booking_com():
     """Main function to scrape prices for multiple dates"""
 
@@ -612,22 +647,24 @@ def scrape_hotel_prices_from_booking_com():
     return results
 
 if __name__ == "__main__":
-    results = scrape_hotel_prices_from_booking_com()
-    if results:
-        save_results(results)
-        # Print summary
-        print(f'\n📊 Summary:')
-        print(f'Total dates processed: {len(results)}')
-        successful = len([r for r in results if r['price'] is not None])
-        print(f'Successful extractions: {successful}')
-        print(f'Failed extractions: {len(results) - successful}')
+    hotel_names = load_hotel_names()
+    print(hotel_names)
+    # results = scrape_hotel_prices_from_booking_com()
+    # if results:
+    #     save_results(results)
+    #     # Print summary
+    #     print(f'\n📊 Summary:')
+    #     print(f'Total dates processed: {len(results)}')
+    #     successful = len([r for r in results if r['price'] is not None])
+    #     print(f'Successful extractions: {successful}')
+    #     print(f'Failed extractions: {len(results) - successful}')
 
-        # Print results
-        print(f'\n📋 Results:')
-        for result in results:
-            status = '✅' if result['price'] else '❌'
-            print(f'{status} {result["checkin"]} to {result["checkout"]}: {result["price"] or result["error"]}')
+    #     # Print results
+    #     print(f'\n📋 Results:')
+    #     for result in results:
+    #         status = '✅' if result['price'] else '❌'
+    #         print(f'{status} {result["checkin"]} to {result["checkout"]}: {result["price"] or result["error"]}')
 
-        print('\n✅ Script completed successfully')
-    else:
-        print('\n❌ Script failed to complete')
+    #     print('\n✅ Script completed successfully')
+    # else:
+    #     print('\n❌ Script failed to complete')
