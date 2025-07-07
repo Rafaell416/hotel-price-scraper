@@ -96,4 +96,4 @@ temp/
 .DS_Store
 
 *.png
-hotel_prices.json
+*.json

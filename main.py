@@ -3,7 +3,6 @@ from selenium.webdriver.chromium.remote_connection import ChromiumRemoteConnecti
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
 import time
 import os
 from datetime import datetime, timedelta
@@ -88,20 +87,9 @@ def close_modal(driver):
         print(f'⚠️ Modal close attempt failed: {str(e)}')
         return False
 
-def search_and_click_on_hotel(driver):
+def search_and_click_on_hotel(driver, hotel_name):
     try:
-        try:
-            modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
-            if modal.is_displayed():
-                print('🎯 Modal found, attempting to close...')
-                if close_modal(driver):
-                    print('🎉 Modal closed successfully!')
-                else:
-                    print('⚠️ Failed to close modal')
-            else:
-                print('ℹ️ Modal exists but not visible, continuing...')
-        except:
-            print('👍🏾 No modal present, continuing...')
+        ensure_no_blocking_modals(driver)
 
         print('🔍 Looking for search input...')
         wait = WebDriverWait(driver, 15)
@@ -112,7 +100,7 @@ def search_and_click_on_hotel(driver):
         )
         
         print('✨ Found search input, entering text...')
-        search_text = "Loft 32 Medellin Living"
+        search_text = hotel_name
         
         # Clear the field completely using multiple methods
         search_input.clear()
@@ -153,21 +141,87 @@ def search_and_click_on_hotel(driver):
         # Re-find the list to avoid stale element
         autocomplete_list = driver.find_element(By.CSS_SELECTOR, "ul[role='group']")
         
-        # Find the specific hotel option
-        hotel_options = autocomplete_list.find_elements(
+        # Find all autocomplete options using stable selectors
+        autocomplete_options = autocomplete_list.find_elements(
             By.CSS_SELECTOR, 
-            "li[role='option'] div.b08850ce41"
+            "li[role='option']"
         )
         
-        # Look for exact match
-        for option in hotel_options:
-            if option.text.strip() == "Loft 32 Medellín Living":
-                print(f'🎯 Found exact match: {option.text}')
-                option.click()
-                print('🏨 Selected hotel from autocomplete')
-                return True
+        print(f'🔍 Found {len(autocomplete_options)} autocomplete options')
         
-        print('⚠️ Hotel not found in autocomplete results')
+        # Look for exact match by checking the hotel name text
+        for i, option in enumerate(autocomplete_options):
+            try:
+                # Use data-testid to find the autocomplete result container
+                result_container = option.find_element(By.CSS_SELECTOR, "[data-testid='autocomplete-result']")
+                
+                # Get all text content from the result container
+                option_text = result_container.text.strip()
+                
+                # Split by lines to get hotel name (first line) and location (second line)
+                text_lines = [line.strip() for line in option_text.split('\n') if line.strip()]
+                
+                if text_lines:
+                    hotel_text = text_lines[0]  # First line should be the hotel name
+                    location_text = text_lines[1] if len(text_lines) > 1 else ""
+                    
+                    print(f'🔍 Option {i+1}: Hotel="{hotel_text}", Location="{location_text}"')
+                    
+                    # Check for exact match with the hotel name
+                    if hotel_text == hotel_name:
+                        print(f'🎯 Found exact match: {hotel_text}')
+                        
+                        # Click on the clickable button element using role attribute
+                        clickable_button = option.find_element(By.CSS_SELECTOR, "div[role='button']")
+                        clickable_button.click()
+                        
+                        print('🏨 Selected hotel from autocomplete')
+                        return True
+                        
+            except Exception as e:
+                print(f'⚠️ Error checking autocomplete option {i+1}: {e}')
+                continue
+        
+        # If exact match not found, try partial matching
+        print('🔍 Exact match not found, checking for partial matches...')
+        for i, option in enumerate(autocomplete_options):
+            try:
+                result_container = option.find_element(By.CSS_SELECTOR, "[data-testid='autocomplete-result']")
+                option_text = result_container.text.strip()
+                text_lines = [line.strip() for line in option_text.split('\n') if line.strip()]
+                
+                if text_lines:
+                    hotel_text = text_lines[0]
+                    
+                    # Check if the hotel name is contained within the option text (case-insensitive)
+                    if hotel_name.lower() in hotel_text.lower() or hotel_text.lower() in hotel_name.lower():
+                        print(f'🎯 Found partial match: {hotel_text}')
+                        
+                        clickable_button = option.find_element(By.CSS_SELECTOR, "div[role='button']")
+                        clickable_button.click()
+                        
+                        print('🏨 Selected hotel from autocomplete (partial match)')
+                        return True
+                        
+            except Exception as e:
+                print(f'⚠️ Error checking autocomplete option {i+1} for partial match: {e}')
+                continue
+        
+        print('❌ Hotel not found in autocomplete results')
+        
+        # Debug: Print all available options for troubleshooting
+        print('🔍 All available autocomplete options:')
+        for i, option in enumerate(autocomplete_options):
+            try:
+                result_container = option.find_element(By.CSS_SELECTOR, "[data-testid='autocomplete-result']")
+                option_text = result_container.text.strip()
+                text_lines = [line.strip() for line in option_text.split('\n') if line.strip()]
+                hotel_text = text_lines[0] if text_lines else "Unknown"
+                location_text = text_lines[1] if len(text_lines) > 1 else "Unknown location"
+                print(f'  {i+1}. Hotel: "{hotel_text}" | Location: "{location_text}"')
+            except Exception as e:
+                print(f'  {i+1}. (Unable to read text: {e})')
+        
         return False
         
     except Exception as e:
@@ -379,12 +433,35 @@ def check_hotel_availability(driver):
         print(f"⚠️ Error checking availability: {e}")
         return True, "Could not determine availability"
 
-def save_results(results, filename='hotel_prices.json'):
-    """Save results to JSON file"""
+def save_results_by_hotel(results, filename_prefix='hotel_prices'):
+    """Save results organized by hotel"""
     try:
-        with open(filename, 'w', encoding='utf-8') as f:
+        # Group results by hotel
+        hotels_data = {}
+        
+        for result in results:
+            hotel_name = result['hotel_name']
+            if hotel_name not in hotels_data:
+                hotels_data[hotel_name] = []
+            hotels_data[hotel_name].append(result)
+        
+        # Save individual files for each hotel
+        for hotel_name, hotel_results in hotels_data.items():
+            # Clean hotel name for filename
+            safe_name = "".join(c for c in hotel_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_name = safe_name.replace(' ', '_')
+            
+            filename = f'{filename_prefix}_{safe_name}.json'
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(hotel_results, f, ensure_ascii=False, indent=2)
+            print(f'💾 {hotel_name}: {filename}')
+        
+        # Save combined results
+        combined_filename = f'{filename_prefix}_all_hotels.json'
+        with open(combined_filename, 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f'💾 Results saved to {filename}')
+        print(f'💾 All results: {combined_filename}')
+        
     except Exception as e:
         print(f'❌ Error saving results: {str(e)}')
 
@@ -394,24 +471,20 @@ def print_separator():
 ------------------------------------------------------------------------------------------------
     ''')
 
-def load_hotel_names(filename='hotel_names.json'):
-    """Load hotel names from JSON file with object structure"""
+def load_hotel_names(filename='hotel_names.txt'):
+    """Load hotel names from text file (one hotel per line)"""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            hotel_objects = data['hotels']
+            lines = f.readlines()
         
-        # Extract hotel names from objects
+        # Clean and filter hotel names
         valid_hotels = []
-        for hotel_obj in hotel_objects:
-            if isinstance(hotel_obj, dict) and 'name' in hotel_obj:
-                hotel_name = hotel_obj['name']
-                if hotel_name and isinstance(hotel_name, str) and hotel_name.strip():
-                    valid_hotels.append(hotel_name.strip())
-                else:
-                    print(f'⚠️ Skipping invalid hotel name: "{hotel_name}"')
+        for line_num, line in enumerate(lines, 1):
+            hotel_name = line.strip()
+            if hotel_name:  # Skip empty lines
+                valid_hotels.append(hotel_name)
             else:
-                print(f'⚠️ Skipping invalid hotel object: {hotel_obj}')
+                print(f'⚠️ Skipping empty line {line_num}')
         
         print(f'📋 Loaded {len(valid_hotels)} hotels from {filename}')
         for i, hotel in enumerate(valid_hotels, 1):
@@ -422,249 +495,246 @@ def load_hotel_names(filename='hotel_names.json'):
     except FileNotFoundError:
         print(f'❌ File {filename} not found')
         return []
-    except KeyError as e:
-        print(f'❌ Missing key in JSON structure: {e}')
-        return []
     except Exception as e:
         print(f'❌ Error loading hotels: {e}')
         return []
 
+def ensure_no_blocking_modals(driver):
+    """Ensure no blocking modals are present"""
+    print('🔍 Checking if modal is present...')
+    try:
+        modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
+        if modal.is_displayed():
+            print('🎯 Modal found, attempting to close...')
+            if close_modal(driver):
+                print('🎉 Modal closed successfully!')
+            else:
+                print('⚠️ Failed to close modal')
+        else:
+            print('ℹ️ Modal exists but not visible, continuing...')
+    except:
+        print('👍🏾 No modal present, continuing...')
+
 def scrape_hotel_prices_from_booking_com():
-    """Main function to scrape prices for multiple dates"""
-
+    """Main function to scrape prices for multiple hotels and dates"""
+    
+    # Load hotels and dates
+    hotel_names = load_hotel_names()
+    if not hotel_names:
+        print('❌ No hotels to process')
+        return []
+    
     dates_list = calculate_dates()
-    results = []
-    max_searches_per_session = 6  # Restart session every 6 searches to prevent WebSocket issues
-
     if not dates_list:
         print('❌ No dates to process')
-        return results
-
-    driver = None
+        return []
     
-    for i, (checkin_date, checkout_date) in enumerate(dates_list):
+    all_results = []
+    max_searches_per_session = 6
+    
+    print(f'\n🚀 Starting scraper for {len(hotel_names)} hotels × {len(dates_list)} dates = {len(hotel_names) * len(dates_list)} total searches')
+    
+    # Process each hotel
+    for hotel_idx, hotel_name in enumerate(hotel_names):
+        print(f'\n{"="*60}')
+        print(f'🏨 HOTEL {hotel_idx + 1}/{len(hotel_names)}: {hotel_name}')
+        print(f'{"="*60}')
+        
+        hotel_results = []
+        driver = None
+        search_count = 0
+        
         try:
-            # Create new session every max_searches_per_session or if driver is None
-            if i % max_searches_per_session == 0 or driver is None:
-                if driver:
-                    print(f'🔄 Restarting browser session to prevent WebSocket issues (batch {i//max_searches_per_session + 1})...')
-                    try:
-                        driver.quit()
-                    except:
-                        pass  # Ignore errors when closing broken session
-                    time.sleep(5)  # Wait a bit longer between sessions
-                
-                print(f'\n🚀 Starting new browser session for batch {i//max_searches_per_session + 1}...')
-                
-                # Retry session creation up to 3 times
-                session_created = False
-                for attempt in range(3):
-                    try:
-                        driver = create_driver_session()
-                        print('🔗 Connected successfully to Bright Data')
-                        session_created = True
-                        break
-                    except Exception as e:
-                        print(f'❌ Session creation attempt {attempt + 1} failed: {str(e)}')
-                        if attempt < 2:
-                            print('⏳ Waiting before retry...')
-                            time.sleep(10)
-                
-                if not session_created:
-                    print('❌ Failed to create session after 3 attempts')
-                    # Add failed results for remaining dates
-                    for j in range(i, len(dates_list)):
-                        remaining_checkin, remaining_checkout = dates_list[j]
-                        results.append({
-                            'checkin': str(remaining_checkin),
-                            'checkout': str(remaining_checkout),
-                            'price': None,
-                            'error': 'Failed to create browser session',
-                            'availability': 'Session error'
-                        })
-                    break
-                
-                # Load Booking.com
+            # Process each date for this hotel
+            for date_idx, (checkin_date, checkout_date) in enumerate(dates_list):
                 try:
-                    print('🌐 Loading Booking.com...')
-                    driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
-
-                    # Wait for page load
-                    if not wait_for_page_load(driver):
-                        raise Exception("Page did not load completely")
+                    # Create new session if needed
+                    if search_count % max_searches_per_session == 0 or driver is None:
+                        if driver:
+                            print(f'🔄 Restarting browser session...')
+                            try:
+                                driver.quit()
+                            except:
+                                pass
+                            time.sleep(5)
+                        
+                        print(f'🚀 Starting new browser session...')
+                        driver = create_driver_session()
+                        print('🔗 Connected to Bright Data')
+                        
+                        # Load Booking.com
+                        print('🌐 Loading Booking.com...')
+                        driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
+                        
+                        if not wait_for_page_load(driver):
+                            raise Exception("Page failed to load")
+                        
+                        time.sleep(5)
+                        ensure_no_blocking_modals(driver)
+                        print('✅ Page ready')
                     
-                    print('📄 Page loaded, waiting for stability...')
-                    time.sleep(5)
+                    print(f'\n📅 Date {date_idx + 1}/{len(dates_list)}: {checkin_date} → {checkout_date}')
                     
-                    # Handle modal if present
-                    print('🔍 Checking if modal is present...')
+                    # Check WebSocket connection
                     try:
-                        modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
-                        if modal.is_displayed():
-                            print('🎯 Modal found, attempting to close...')
-                            if close_modal(driver):
-                                print('🎉 Modal closed successfully!')
-                            else:
-                                print('⚠️ Failed to close modal')
+                        driver.current_url
+                    except Exception as e:
+                        if "cdp_ws_error" in str(e) or "WebSocket" in str(e):
+                            print('🔌 WebSocket lost, restarting...')
+                            driver = None
+                            continue
                         else:
-                            print('ℹ️ Modal exists but not visible, continuing...')
-                    except:
-                        print('👍🏾 No modal present, continuing...')
-
-                    print('🎉 Page ready!')
+                            raise e
+                                        
+                    # Step 1: Search for hotel
+                    if not search_and_click_on_hotel(driver, hotel_name):
+                        print(f'❌ Hotel search failed')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': None,
+                            'error': 'Hotel search failed',
+                            'availability': 'Search failed'
+                        })
+                        continue
                     
+                    # Step 2: Select dates
+                    if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
+                        print(f'❌ Date selection failed')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': None,
+                            'error': 'Date selection failed',
+                            'availability': 'Date selection failed'
+                        })
+                        continue
+                    
+                    # Step 3: Click search
+                    if not click_on_search_button(driver):
+                        print(f'❌ Search execution failed')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': None,
+                            'error': 'Search execution failed',
+                            'availability': 'Search failed'
+                        })
+                        continue
+                    
+                    # Step 4: Check availability and extract price
+                    is_available, availability_message = check_hotel_availability(driver)
+                    
+                    if not is_available:
+                        print(f'❌ Not available: {availability_message}')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': None,
+                            'error': f'Not available: {availability_message}',
+                            'availability': 'Not available'
+                        })
+                    else:
+                        # Extract price
+                        price = extract_price(driver)
+                        if price and 'Not available' not in str(price):
+                            print(f'✅ Completed: {price}')
+                            hotel_results.append({
+                                'hotel_name': hotel_name,
+                                'checkin': str(checkin_date),
+                                'checkout': str(checkout_date),
+                                'price': price,
+                                'error': None,
+                                'availability': 'Available'
+                            })
+                        else:
+                            print(f'❌ Price extraction failed')
+                            hotel_results.append({
+                                'hotel_name': hotel_name,
+                                'checkin': str(checkin_date),
+                                'checkout': str(checkout_date),
+                                'price': None,
+                                'error': 'Price extraction failed',
+                                'availability': 'Price extraction failed'
+                            })
+                    
+                    search_count += 1
+                    
+                    # Wait between searches
+                    if date_idx < len(dates_list) - 1:
+                        print('⏸️ Waiting...')
+                        time.sleep(3)
+                
                 except Exception as e:
-                    print(f'❌ Failed to load initial page: {str(e)}')
-                    continue
-
-            print(f"Processing date {i+1}/{len(dates_list)}: {checkin_date} - {checkout_date}")
-
-            # Check for WebSocket issues before proceeding
-            try:
-                # Simple test to see if driver is responsive
-                driver.current_url
-            except Exception as e:
-                if "cdp_ws_error" in str(e) or "WebSocket" in str(e):
-                    print('🔌 WebSocket connection lost, forcing session restart...')
-                    driver = None
-                    continue
-                else:
-                    raise e
-
-            # Step 1: search and click on hotel
-            if not search_and_click_on_hotel(driver):
-                print(f'⚠️ Could not complete hotel search and selection for date {i+1}/{len(dates_list)}')
-                results.append({
-                    'checkin': str(checkin_date),
-                    'checkout': str(checkout_date),
-                    'price': None,
-                    'error': 'Failed to search for hotel',
-                    'availability': 'Search failed'
-                })
-                driver.save_screenshot(f"hotel_search_failed_{i+1}.png")
-                continue
-            else:
-                print(f'🏨 Hotel search and selection completed for date {i+1}/{len(dates_list)}')
-
-            # Step 2: select dates
-            if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
-                print(f'⚠️ Could not complete date selection for date {i+1}/{len(dates_list)}')
-                results.append({
-                    'checkin': str(checkin_date),
-                    'checkout': str(checkout_date),
-                    'price': None,
-                    'error': 'Failed to select date',
-                    'availability': 'Date selection failed'
-                })
-                continue
-            else:
-                print(f'📆 Date selection completed for date {i+1}/{len(dates_list)}')
-
-            # Step 3: click on search button
-            if not click_on_search_button(driver):
-                print(f'⚠️ Could not complete search button click for date {i+1}/{len(dates_list)}')
-                results.append({
-                    'checkin': str(checkin_date),
-                    'checkout': str(checkout_date),
-                    'price': None,
-                    'error': 'Failed to click on search button',
-                    'availability': 'Search button failed'
-                })
-                continue
-            else:
-                print(f'🔍 Search button clicked for date {i+1}/{len(dates_list)}')
-
-            # Step 4: Check availability first
-            print(f'🔍 Checking availability for date {i+1}/{len(dates_list)}')
-            is_available, availability_message = check_hotel_availability(driver)
-
-            if not is_available:
-                print(f'❌ Hotel not available: {availability_message}')
-                results.append({
-                    'checkin': str(checkin_date),
-                    'checkout': str(checkout_date),
-                    'price': None,
-                    'error': f'Hotel not available - {availability_message}',
-                    'availability': 'Not available'
-                })
-                print_separator()
-                continue
-
-            # Step 5: extract price (only if available)
-            print(f'💰 Extracting price for date {i+1}/{len(dates_list)}')
-            price = extract_price(driver)
-            print(f'💵 Price: {price}')
-
-            # Determine if this was successful
-            if price and 'Not available' not in str(price):
-                error_msg = None
-                availability_status = 'Available'
-            else:
-                error_msg = 'Failed to extract price' if not price else price
-                availability_status = 'Price extraction failed'
-
-            results.append({
-                'checkin': str(checkin_date),
-                'checkout': str(checkout_date),
-                'price': price if price and 'Not available' not in str(price) else None,
-                'error': error_msg,
-                'availability': availability_status
-            })
-
-            print(f'✅ Completed: {checkin_date} to {checkout_date} - Price: {price}')
-
-            # Wait between searches to avoid rate limiting
-            if i < len(dates_list) - 1:  # Don't wait after last iteration
-                print('⏸️ Waiting before next search...')
-                time.sleep(3)
-
-            print_separator()
-
+                    error_msg = str(e)
+                    print(f'❌ Error: {error_msg}')
+                    
+                    if "cdp_ws_error" in error_msg or "WebSocket" in error_msg:
+                        driver = None
+                    
+                    hotel_results.append({
+                        'hotel_name': hotel_name,
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': f'Exception: {error_msg}',
+                        'availability': 'Error'
+                    })
+            
+            # Add this hotel's results to all results
+            all_results.extend(hotel_results)
+            
+            # Print summary for this hotel
+            successful = len([r for r in hotel_results if r['price'] is not None])
+            print(f'\n📊 Summary for {hotel_name}:')
+            print(f'   ✅ Successful: {successful}/{len(hotel_results)}')
+            print(f'   ❌ Failed: {len(hotel_results) - successful}/{len(hotel_results)}')
+            
         except Exception as e:
-            error_msg = str(e)
-            print(f"❌ Error on loop processing date {i+1}/{len(dates_list)}: {error_msg}")
-            
-            # Check if it's a WebSocket error
-            if "cdp_ws_error" in error_msg or "WebSocket" in error_msg:
-                print('🔌 WebSocket error detected, will restart session on next iteration')
-                driver = None  # Force session restart
-            
-            results.append({
-                'checkin': str(checkin_date),
-                'checkout': str(checkout_date),
-                'price': None,
-                'error': f'Exception: {error_msg}',
-                'availability': 'Error'
-            })
-            
-    if driver:
-        print('👋 Closing browser session...')
-        try:
-            driver.quit()
-        except:
-            pass  # Ignore errors when closing
+            print(f'❌ Critical error for {hotel_name}: {str(e)}')
+        
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except:
+                    pass
+                driver = None
+        
+        # Wait between hotels
+        if hotel_idx < len(hotel_names) - 1:
+            print(f'\n⏸️ Waiting before next hotel...')
+            time.sleep(10)
     
-    return results
+    return all_results
 
 if __name__ == "__main__":
-    hotel_names = load_hotel_names()
-    print(hotel_names)
-    # results = scrape_hotel_prices_from_booking_com()
-    # if results:
-    #     save_results(results)
-    #     # Print summary
-    #     print(f'\n📊 Summary:')
-    #     print(f'Total dates processed: {len(results)}')
-    #     successful = len([r for r in results if r['price'] is not None])
-    #     print(f'Successful extractions: {successful}')
-    #     print(f'Failed extractions: {len(results) - successful}')
-
-    #     # Print results
-    #     print(f'\n📋 Results:')
-    #     for result in results:
-    #         status = '✅' if result['price'] else '❌'
-    #         print(f'{status} {result["checkin"]} to {result["checkout"]}: {result["price"] or result["error"]}')
-
-    #     print('\n✅ Script completed successfully')
-    # else:
-    #     print('\n❌ Script failed to complete')
+    results = scrape_hotel_prices_from_booking_com()
+    if results:
+        save_results_by_hotel(results)
+        
+        # Print final summary
+        hotels = list(set([r['hotel_name'] for r in results]))
+        total_searches = len(results)
+        successful = len([r for r in results if r['price'] is not None])
+        
+        print(f'\n🎉 FINAL SUMMARY:')
+        print(f'📊 Hotels processed: {len(hotels)}')
+        print(f'📊 Total searches: {total_searches}')
+        print(f'📊 Successful: {successful}')
+        print(f'📊 Failed: {total_searches - successful}')
+        print(f'📊 Success rate: {(successful/total_searches*100):.1f}%')
+        
+        print(f'\n📋 Results by hotel:')
+        for hotel in hotels:
+            hotel_results = [r for r in results if r['hotel_name'] == hotel]
+            hotel_successful = len([r for r in hotel_results if r['price'] is not None])
+            print(f'   🏨 {hotel}: {hotel_successful}/{len(hotel_results)} successful')
+        
+        print('\n✅ Scraping completed!')
+    else:
+        print('\n❌ No results to save')
