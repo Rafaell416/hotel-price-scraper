@@ -90,6 +90,19 @@ def close_modal(driver):
 
 def search_and_click_on_hotel(driver):
     try:
+        try:
+            modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
+            if modal.is_displayed():
+                print('🎯 Modal found, attempting to close...')
+                if close_modal(driver):
+                    print('🎉 Modal closed successfully!')
+                else:
+                    print('⚠️ Failed to close modal')
+            else:
+                print('ℹ️ Modal exists but not visible, continuing...')
+        except:
+            print('👍🏾 No modal present, continuing...')
+
         print('🔍 Looking for search input...')
         wait = WebDriverWait(driver, 15)
 
@@ -193,7 +206,7 @@ def is_date_picker_open(driver):
         date_picker = driver.find_element(By.CSS_SELECTOR, "[data-testid='searchbox-datepicker-calendar']")
         
         if date_picker.is_displayed():
-            print('✅ Date picker is open')
+            print('👍🏾 Date picker is open')
             return True
         else:
             print('❌ Date picker is not visible')
@@ -377,8 +390,8 @@ def save_results(results, filename='hotel_prices.json'):
 
 def print_separator():
     print('''
-          ------------------------------------------------------------------------------------------------
-          ------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------
     ''')
 
 def scrape_hotel_prices_from_booking_com():
@@ -386,158 +399,215 @@ def scrape_hotel_prices_from_booking_com():
 
     dates_list = calculate_dates()
     results = []
+    max_searches_per_session = 6  # Restart session every 6 searches to prevent WebSocket issues
 
     if not dates_list:
         print('❌ No dates to process')
         return results
 
     driver = None
-    try:
-        print(f'\n🚀 Starting hotel prices scraper script...')
-        
-        # Create new driver session
-        driver = create_driver_session()
-        print('🔗 Connected successfully to Bright Data')
-        
-        # Load Booking.com
-        print('🌐 Loading Booking.com...')
-        driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
-
-        # Wait for page load
-        if not wait_for_page_load(driver):
-            raise Exception("Page did not load completely")
-        
-        print('📄 Page loaded, waiting for stability...')
-        time.sleep(5)
-        
-        # Check if modal is present before trying to close it
-        print('🔍 Checking if modal is present...')
+    
+    for i, (checkin_date, checkout_date) in enumerate(dates_list):
         try:
-            modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
-            if modal.is_displayed():
-                print('🎯 Modal found, attempting to close...')
-                if close_modal(driver):
-                    print('🎉 Modal closed successfully!')
-                else:
-                    print('⚠️ Failed to close modal')
-            else:
-                print('ℹ️ Modal exists but not visible, continuing...')
-        except:
-            print('✅ No modal present, continuing...')
-
-        print('🎉 Page ready!')
-
-        for i, (checkin_date, checkout_date) in enumerate(dates_list):
-            try:
-                print(f"Processing date {i+1}/{len(dates_list)}: {checkin_date} - {checkout_date}")
-
-                # Check for modal before searching
-                print('🔍 Checking for blocking modals...')
+            # Create new session every max_searches_per_session or if driver is None
+            if i % max_searches_per_session == 0 or driver is None:
+                if driver:
+                    print(f'🔄 Restarting browser session to prevent WebSocket issues (batch {i//max_searches_per_session + 1})...')
+                    try:
+                        driver.quit()
+                    except:
+                        pass  # Ignore errors when closing broken session
+                    time.sleep(5)  # Wait a bit longer between sessions
+                
+                print(f'\n🚀 Starting new browser session for batch {i//max_searches_per_session + 1}...')
+                
+                # Retry session creation up to 3 times
+                session_created = False
+                for attempt in range(3):
+                    try:
+                        driver = create_driver_session()
+                        print('🔗 Connected successfully to Bright Data')
+                        session_created = True
+                        break
+                    except Exception as e:
+                        print(f'❌ Session creation attempt {attempt + 1} failed: {str(e)}')
+                        if attempt < 2:
+                            print('⏳ Waiting before retry...')
+                            time.sleep(10)
+                
+                if not session_created:
+                    print('❌ Failed to create session after 3 attempts')
+                    # Add failed results for remaining dates
+                    for j in range(i, len(dates_list)):
+                        remaining_checkin, remaining_checkout = dates_list[j]
+                        results.append({
+                            'checkin': str(remaining_checkin),
+                            'checkout': str(remaining_checkout),
+                            'price': None,
+                            'error': 'Failed to create browser session',
+                            'availability': 'Session error'
+                        })
+                    break
+                
+                # Load Booking.com
                 try:
-                    modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
-                    if modal.is_displayed():
-                        print('🎯 Modal found, closing it...')
-                        if close_modal(driver):
-                            print('👍🏾 Modal closed successfully')
-                            time.sleep(2)
+                    print('🌐 Loading Booking.com...')
+                    driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
+
+                    # Wait for page load
+                    if not wait_for_page_load(driver):
+                        raise Exception("Page did not load completely")
+                    
+                    print('📄 Page loaded, waiting for stability...')
+                    time.sleep(5)
+                    
+                    # Handle modal if present
+                    print('🔍 Checking if modal is present...')
+                    try:
+                        modal = driver.find_element(By.CSS_SELECTOR, "button[aria-label='Dismiss sign-in info.']")
+                        if modal.is_displayed():
+                            print('🎯 Modal found, attempting to close...')
+                            if close_modal(driver):
+                                print('🎉 Modal closed successfully!')
+                            else:
+                                print('⚠️ Failed to close modal')
                         else:
-                            print('⚠️ Failed to close modal, but continuing...')
-                except:
-                    print('👍🏾 No blocking modal found')
+                            print('ℹ️ Modal exists but not visible, continuing...')
+                    except:
+                        print('👍🏾 No modal present, continuing...')
 
-                # Step 1: search and click on hotel
-                if not search_and_click_on_hotel(driver):
-                    print(f'⚠️ Could not complete hotel search and selection for date {i+1}/{len(dates_list)}')
-                    results.append({
-                        'checkin': str(checkin_date),
-                        'checkout': str(checkout_date),
-                        'price': None,
-                        'error': 'Failed to search for hotel'
-                    })
-                    driver.save_screenshot(f"hotel_search_failed_{i+1}.png")
-                    continue
-                else:
-                    print(f'✅ Hotel search and selection completed for date {i+1}/{len(dates_list)}')
-
-                # Step 2: select dates
-                if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
-                    print(f'⚠️ Could not complete date selection for date {i+1}/{len(dates_list)}')
-                    results.append({
-                        'checkin': str(checkin_date),
-                        'checkout': str(checkout_date),
-                        'price': None,
-                        'error': 'Failed to select date'
-                    })
-                    continue
-                else:
-                    print(f'✅ Date selection completed for date {i+1}/{len(dates_list)}')
-
-                # Step 3: click on search button
-                if not click_on_search_button(driver):
-                    print(f'⚠️ Could not complete search button click for date {i+1}/{len(dates_list)}')
-                    results.append({
-                        'checkin': str(checkin_date),
-                        'checkout': str(checkout_date),
-                        'price': None,
-                        'error': 'Failed to click on search button'
-                    })
-                    continue
-                else:
-                    print(f'✅ Search button clicked for date {i+1}/{len(dates_list)}')
-
-                # Step 4: Check availability first
-                print(f'🔍 Checking availability for date {i+1}/{len(dates_list)}')
-                is_available, availability_message = check_hotel_availability(driver)
-
-                if not is_available:
-                    print(f'❌ Hotel not available: {availability_message}')
-                    results.append({
-                        'checkin': str(checkin_date),
-                        'checkout': str(checkout_date),
-                        'price': None,
-                        'error': f'Hotel not available - {availability_message}',
-                        'availability': 'Not available'
-                    })
+                    print('🎉 Page ready!')
+                    
+                except Exception as e:
+                    print(f'❌ Failed to load initial page: {str(e)}')
                     continue
 
-                # Step 5: extract price (only if available)
-                print(f'💰 Extracting price for date {i+1}/{len(dates_list)}')
-                price = extract_price(driver)
-                print(f'💵 Price: {price}')
+            print(f"Processing date {i+1}/{len(dates_list)}: {checkin_date} - {checkout_date}")
 
-                # Determine if this was successful
-                if price and 'Not available' not in str(price):
-                    error_msg = None
-                    availability_status = 'Available'
+            # Check for WebSocket issues before proceeding
+            try:
+                # Simple test to see if driver is responsive
+                driver.current_url
+            except Exception as e:
+                if "cdp_ws_error" in str(e) or "WebSocket" in str(e):
+                    print('🔌 WebSocket connection lost, forcing session restart...')
+                    driver = None
+                    continue
                 else:
-                    error_msg = 'Failed to extract price' if not price else price
-                    availability_status = 'Price extraction failed'
+                    raise e
 
+            # Step 1: search and click on hotel
+            if not search_and_click_on_hotel(driver):
+                print(f'⚠️ Could not complete hotel search and selection for date {i+1}/{len(dates_list)}')
                 results.append({
                     'checkin': str(checkin_date),
                     'checkout': str(checkout_date),
-                    'price': price if price and 'Not available' not in str(price) else None,
-                    'error': error_msg,
-                    'availability': availability_status
+                    'price': None,
+                    'error': 'Failed to search for hotel',
+                    'availability': 'Search failed'
                 })
+                driver.save_screenshot(f"hotel_search_failed_{i+1}.png")
+                continue
+            else:
+                print(f'🏨 Hotel search and selection completed for date {i+1}/{len(dates_list)}')
 
-                print(f'✅ Completed: {checkin_date} to {checkout_date} - Price: {price}')
+            # Step 2: select dates
+            if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
+                print(f'⚠️ Could not complete date selection for date {i+1}/{len(dates_list)}')
+                results.append({
+                    'checkin': str(checkin_date),
+                    'checkout': str(checkout_date),
+                    'price': None,
+                    'error': 'Failed to select date',
+                    'availability': 'Date selection failed'
+                })
+                continue
+            else:
+                print(f'📆 Date selection completed for date {i+1}/{len(dates_list)}')
 
-                # Wait between searches to avoid rate limiting
-                if i < len(dates_list) - 1:  # Don't wait after last iteration
-                    print('⏸️ Waiting before next search...')
-                    time.sleep(3)
+            # Step 3: click on search button
+            if not click_on_search_button(driver):
+                print(f'⚠️ Could not complete search button click for date {i+1}/{len(dates_list)}')
+                results.append({
+                    'checkin': str(checkin_date),
+                    'checkout': str(checkout_date),
+                    'price': None,
+                    'error': 'Failed to click on search button',
+                    'availability': 'Search button failed'
+                })
+                continue
+            else:
+                print(f'🔍 Search button clicked for date {i+1}/{len(dates_list)}')
+
+            # Step 4: Check availability first
+            print(f'🔍 Checking availability for date {i+1}/{len(dates_list)}')
+            is_available, availability_message = check_hotel_availability(driver)
+
+            if not is_available:
+                print(f'❌ Hotel not available: {availability_message}')
+                results.append({
+                    'checkin': str(checkin_date),
+                    'checkout': str(checkout_date),
+                    'price': None,
+                    'error': f'Hotel not available - {availability_message}',
+                    'availability': 'Not available'
+                })
                 print_separator()
-            except Exception as e:
-                print(f"Error on loop processing date {i+1}/{len(dates_list)}: {str(e)}")
+                continue
+
+            # Step 5: extract price (only if available)
+            print(f'💰 Extracting price for date {i+1}/{len(dates_list)}')
+            price = extract_price(driver)
+            print(f'💵 Price: {price}')
+
+            # Determine if this was successful
+            if price and 'Not available' not in str(price):
+                error_msg = None
+                availability_status = 'Available'
+            else:
+                error_msg = 'Failed to extract price' if not price else price
+                availability_status = 'Price extraction failed'
+
+            results.append({
+                'checkin': str(checkin_date),
+                'checkout': str(checkout_date),
+                'price': price if price and 'Not available' not in str(price) else None,
+                'error': error_msg,
+                'availability': availability_status
+            })
+
+            print(f'✅ Completed: {checkin_date} to {checkout_date} - Price: {price}')
+
+            # Wait between searches to avoid rate limiting
+            if i < len(dates_list) - 1:  # Don't wait after last iteration
+                print('⏸️ Waiting before next search...')
+                time.sleep(3)
+
+            print_separator()
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Error on loop processing date {i+1}/{len(dates_list)}: {error_msg}")
             
-    except Exception as e:
-        print(f'❌ Error on function: {str(e)}')
-        
-    finally:
-        if driver:
-            print('👋 Closing browser session...')
+            # Check if it's a WebSocket error
+            if "cdp_ws_error" in error_msg or "WebSocket" in error_msg:
+                print('🔌 WebSocket error detected, will restart session on next iteration')
+                driver = None  # Force session restart
+            
+            results.append({
+                'checkin': str(checkin_date),
+                'checkout': str(checkout_date),
+                'price': None,
+                'error': f'Exception: {error_msg}',
+                'availability': 'Error'
+            })
+            
+    if driver:
+        print('👋 Closing browser session...')
+        try:
             driver.quit()
+        except:
+            pass  # Ignore errors when closing
     
     return results
 

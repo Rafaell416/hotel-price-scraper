@@ -36,7 +36,7 @@ A Python-based web scraper for extracting hotel prices from Booking.com using Se
 3. **Install dependencies**:
 
    ```bash
-   pip install selenium python-dotenv requests urllib3
+   pip install -r requirements.txt
    ```
 
 4. **Set up environment variables**:
@@ -84,5 +84,3 @@ The scraper is currently configured to search for "Loft 32 Medellin Living". To 
 ```python
 search_text = "Your Hotel Name Here"
 ```
-
-### Example Output
