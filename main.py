@@ -498,51 +498,6 @@ def save_results_to_csv(results, filename='hotel_prices.csv'):
         
         print(f'💾 CSV saved: {csv_filename}')
         
-        # Also create a detailed CSV with error information
-        detailed_filename = f'hotel_prices_detailed_{timestamp}.csv'
-        
-        with open(detailed_filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            
-            # Detailed CSV header
-            detailed_header = [
-                'Hotel Name', 'Check-in Date', 'Check-out Date', 'Date Range',
-                'Price', 'Availability', 'Error', 'Status'
-            ]
-            writer.writerow(detailed_header)
-            
-            # Write detailed data
-            for result in results:
-                date_range = f"{result['checkin']} → {result['checkout']}"
-                
-                # Determine status
-                if result['price'] and 'Not available' not in str(result['price']):
-                    status = 'SUCCESS'
-                    price = result['price']
-                elif result['availability'] == 'Not available':
-                    status = 'NOT_AVAILABLE'
-                    price = 'N/A'
-                elif result['error']:
-                    status = 'ERROR'
-                    price = 'ERROR'
-                else:
-                    status = 'NO_DATA'
-                    price = 'N/A'
-                
-                detailed_row = [
-                    result['hotel_name'],
-                    result['checkin'],
-                    result['checkout'],
-                    date_range,
-                    price,
-                    result.get('availability', 'Unknown'),
-                    result.get('error', ''),
-                    status
-                ]
-                writer.writerow(detailed_row)
-        
-        print(f'💾 Detailed CSV saved: {detailed_filename}')
-        
         # Print summary statistics
         total_combinations = len(hotels) * len(all_dates)
         successful_prices = len([r for r in results if r['price'] and 'Not available' not in str(r['price'])])
@@ -563,11 +518,11 @@ def save_results_to_csv(results, filename='hotel_prices.csv'):
         for i, hotel in enumerate(hotels, 1):
             print(f'   {i}. {hotel}')
             
-        return csv_filename, detailed_filename
+        return csv_filename
         
     except Exception as e:
         print(f'❌ Error saving CSV: {str(e)}')
-        return None, None
+        return None
 
 def create_price_summary_csv(results, filename_prefix='hotel_summary'):
     """Create a summary CSV with aggregated statistics per hotel"""
@@ -903,11 +858,12 @@ def scrape_hotel_prices_from_booking_com():
     
     return all_results
 
+# Updated main function - only creates main CSV and summary CSV
 if __name__ == "__main__":
     results = scrape_hotel_prices_from_booking_com()
     if results:
-        # Save to CSV instead of JSON
-        main_csv, detailed_csv = save_results_to_csv(results)
+        # Save to CSV files (main matrix and summary only)
+        main_csv = save_results_to_csv(results)
         summary_csv = create_price_summary_csv(results)
         
         # Print final summary
@@ -931,8 +887,6 @@ if __name__ == "__main__":
         print(f'\n📁 FILES CREATED:')
         if main_csv:
             print(f'   📊 Main CSV (matrix format): {main_csv}')
-        if detailed_csv:
-            print(f'   📋 Detailed CSV (row format): {detailed_csv}')
         if summary_csv:
             print(f'   📈 Summary CSV (statistics): {summary_csv}')
         

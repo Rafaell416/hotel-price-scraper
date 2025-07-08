@@ -28,7 +28,7 @@ A Python-based web scraper for extracting hotel prices from Booking.com using Se
 1. **Clone the repository**:
 
    ```bash
-   git clone <repository-url>
+   git clone <git@github.com:Rafaell416/hotel-price-scraper.git>
    cd hotel-prices-scrapper
    ```
 
@@ -113,7 +113,7 @@ The scraper provides detailed logging with emoji indicators:
 
 ## 📊 Output Files
 
-The scraper generates **three different CSV files** with timestamped filenames:
+The scraper generates **two CSV files** with timestamped filenames:
 
 ### 1. Main CSV (`hotel_prices_YYYYMMDD_HHMMSS.csv`)
 
@@ -136,36 +136,7 @@ Check-in Date,Check-out Date,Date Range,Loft Apartamentos Lleras,Apartamento lof
   - `ERROR` - Technical error occurred
   - `NO DATA` - No search performed
 
-### 2. Detailed CSV (`hotel_prices_detailed_YYYYMMDD_HHMMSS.csv`)
-
-**Row-based format** - Complete information for data analysis
-
-```csv
-Hotel Name,Check-in Date,Check-out Date,Date Range,Price,Availability,Error,Status
-Loft Apartamentos Lleras,2025-07-07,2025-07-08,2025-07-07 → 2025-07-08,COP 178140,Available,,SUCCESS
-Loft Apartamentos Lleras,2025-07-08,2025-07-09,2025-07-08 → 2025-07-09,N/A,Not available,,NOT_AVAILABLE
-Apartamento loft medellin by Casa Lucca,2025-07-07,2025-07-08,2025-07-07 → 2025-07-08,ERROR,Error,Hotel search failed,ERROR
-```
-
-**Columns:**
-
-- `Hotel Name`: Full hotel name
-- `Check-in Date`: Check-in date (YYYY-MM-DD)
-- `Check-out Date`: Check-out date (YYYY-MM-DD)
-- `Date Range`: Human-readable date range
-- `Price`: Extracted price or status
-- `Availability`: Availability status from Booking.com
-- `Error`: Detailed error message if applicable
-- `Status`: Overall result status
-
-**Status Values:**
-
-- `SUCCESS`: Price successfully extracted
-- `NOT_AVAILABLE`: Hotel not available for dates
-- `ERROR`: Technical error occurred
-- `NO_DATA`: No search performed
-
-### 3. Summary CSV (`hotel_summary_YYYYMMDD_HHMMSS.csv`)
+### 2. Summary CSV (`hotel_summary_YYYYMMDD_HHMMSS.csv`)
 
 **Statistics format** - Aggregated performance metrics per hotel
 
@@ -193,15 +164,14 @@ Apartamento loft medellin by Casa Lucca,31,18,8,5,58.1%,180000,320000,245000,180
 ### Excel/Google Sheets Analysis
 
 1. **Main CSV**: Open in Excel for quick price comparison across hotels and dates
-2. **Detailed CSV**: Use for filtering, sorting, and detailed analysis
-3. **Summary CSV**: Perfect for hotel performance comparison
+2. **Summary CSV**: Perfect for hotel performance comparison
 
 ### Example Analysis Queries
 
 - **Best Price Days**: Filter Main CSV to find lowest prices across all hotels
 - **Hotel Availability**: Use Summary CSV to compare success rates
-- **Price Trends**: Sort Detailed CSV by date to identify pricing patterns
-- **Error Analysis**: Filter Detailed CSV by Status = 'ERROR' to identify issues
+- **Price Trends**: Sort Main CSV by date to identify pricing patterns
+- **Performance Analysis**: Use Summary CSV to compare hotel success rates
 
 ## 🔄 Error Handling & Recovery
 
