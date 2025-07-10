@@ -3,11 +3,13 @@ from selenium.webdriver.chromium.remote_connection import ChromiumRemoteConnecti
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import time
-import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+import time
+import os
 import csv
+import argparse
 
 load_dotenv()
 
@@ -661,11 +663,226 @@ def ensure_no_blocking_modals(driver):
     except:
         print('👍🏾 No modal present, continuing...')
 
-def scrape_hotel_prices_from_booking_com():
-    """Main function to scrape prices for multiple hotels and dates"""
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description='Hotel Price Scraper for Booking.com',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Scrape a single hotel
+  python main.py --hotel "Hotel Dann Carlton Bogotá"
+  
+  # Scrape all hotels from file
+  python main.py --file hotel_names.txt
+  
+  # Scrape all hotels from custom file
+  python main.py --file my_hotels.txt
+        """
+    )
+    
+    # Hotel input options (mutually exclusive)
+    hotel_group = parser.add_mutually_exclusive_group(required=True)
+    hotel_group.add_argument(
+        '--hotel',
+        type=str,
+        help='Single hotel name to scrape (exact name as it appears on Booking.com)'
+    )
+    hotel_group.add_argument(
+        '--file', '-f',
+        type=str,
+        help='Path to text file containing hotel names (one per line)'
+    )
+    
+    return parser.parse_args()
+
+def load_hotel_names_from_args(args):
+    """Load hotel names based on command line arguments"""
+    if args.hotel:
+        # Single hotel mode
+        print(f'📋 Single hotel mode: {args.hotel}')
+        return [args.hotel]
+    elif args.file:
+        # File mode
+        return load_hotel_names(args.file)
+    else:
+        print('❌ No hotel input specified')
+        return []
+
+def scrape_single_hotel_with_args(hotel_name, dates_list):
+    """Modified single hotel scraper for command line use"""
+    print(f'🚀 Starting hotel: {hotel_name} with {len(dates_list)} dates')
+    
+    hotel_results = []
+    driver = None
+    search_count = 0
+    max_searches_per_session = 6
+    
+    try:
+        # Process each date for this hotel
+        for date_idx, (checkin_date, checkout_date) in enumerate(dates_list):
+            try:
+                # Create new session if needed
+                if search_count % max_searches_per_session == 0 or driver is None:
+                    if driver:
+                        print(f'🔄 [{hotel_name}] Restarting browser session...')
+                        try:
+                            driver.quit()
+                        except:
+                            pass
+                        time.sleep(5)
+                    
+                    print(f'🚀 [{hotel_name}] Starting new browser session...')
+                    driver = create_driver_session()
+                    print(f'🔗 [{hotel_name}] Connected to Bright Data')
+                    
+                    # Load Booking.com
+                    print(f'🌐 [{hotel_name}] Loading Booking.com...')
+                    driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
+                    
+                    if not wait_for_page_load(driver):
+                        raise Exception("Page failed to load")
+                    
+                    time.sleep(5)
+                    ensure_no_blocking_modals(driver)
+                    print(f'✅ [{hotel_name}] Page ready')
+                
+                print(f'📅 [{hotel_name}] Date {date_idx + 1}/{len(dates_list)}: {checkin_date} → {checkout_date}')
+                
+                # Check WebSocket connection
+                try:
+                    driver.current_url
+                except Exception as e:
+                    if "cdp_ws_error" in str(e) or "WebSocket" in str(e):
+                        print(f'🔌 [{hotel_name}] WebSocket lost, restarting...')
+                        driver = None
+                        continue
+                    else:
+                        raise e
+                
+                # Step 1: Search for hotel
+                if not search_and_click_on_hotel(driver, hotel_name):
+                    print(f'❌ [{hotel_name}] Hotel search failed')
+                    hotel_results.append({
+                        'hotel_name': hotel_name,
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Hotel search failed',
+                        'availability': 'Search failed'
+                    })
+                    continue
+                
+                # Step 2: Select dates
+                if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
+                    print(f'❌ [{hotel_name}] Date selection failed')
+                    hotel_results.append({
+                        'hotel_name': hotel_name,
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Date selection failed',
+                        'availability': 'Date selection failed'
+                    })
+                    continue
+                
+                # Step 3: Click search
+                if not click_on_search_button(driver):
+                    print(f'❌ [{hotel_name}] Search execution failed')
+                    hotel_results.append({
+                        'hotel_name': hotel_name,
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': 'Search execution failed',
+                        'availability': 'Search failed'
+                    })
+                    continue
+                
+                # Step 4: Check availability and extract price
+                is_available, availability_message = check_hotel_availability(driver)
+                
+                if not is_available:
+                    print(f'❌ [{hotel_name}] Not available: {availability_message}')
+                    hotel_results.append({
+                        'hotel_name': hotel_name,
+                        'checkin': str(checkin_date),
+                        'checkout': str(checkout_date),
+                        'price': None,
+                        'error': f'Not available: {availability_message}',
+                        'availability': 'Not available'
+                    })
+                else:
+                    # Extract price
+                    price = extract_price(driver)
+                    if price and 'Not available' not in str(price):
+                        print(f'✅ [{hotel_name}] Completed: {price}')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': price,
+                            'error': None,
+                            'availability': 'Available'
+                        })
+                    else:
+                        print(f'❌ [{hotel_name}] Price extraction failed')
+                        hotel_results.append({
+                            'hotel_name': hotel_name,
+                            'checkin': str(checkin_date),
+                            'checkout': str(checkout_date),
+                            'price': None,
+                            'error': 'Price extraction failed',
+                            'availability': 'Price extraction failed'
+                        })
+                
+                search_count += 1
+                
+                # Wait between searches
+                if date_idx < len(dates_list) - 1:
+                    print('⏸️ Waiting...')
+                    time.sleep(3)
+            
+            except Exception as e:
+                error_msg = str(e)
+                print(f'❌ [{hotel_name}] Error: {error_msg}')
+                
+                if "cdp_ws_error" in error_msg or "WebSocket" in error_msg:
+                    driver = None
+                
+                hotel_results.append({
+                    'hotel_name': hotel_name,
+                    'checkin': str(checkin_date),
+                    'checkout': str(checkout_date),
+                    'price': None,
+                    'error': f'Exception: {error_msg}',
+                    'availability': 'Error'
+                })
+        
+        # Print summary for this hotel
+        successful = len([r for r in hotel_results if r['price'] is not None])
+        print(f'\n📊 Summary for {hotel_name}:')
+        print(f'   ✅ Successful: {successful}/{len(hotel_results)}')
+        print(f'   ❌ Failed: {len(hotel_results) - successful}/{len(hotel_results)}')
+        
+        return hotel_results
+        
+    except Exception as e:
+        print(f'❌ Critical error for {hotel_name}: {str(e)}')
+        return hotel_results
+    
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+
+def scrape_hotels_with_args(args):
+    """Main scraping function that uses command line arguments"""
     
     # Load hotels and dates
-    hotel_names = load_hotel_names()
+    hotel_names = load_hotel_names_from_args(args)
     if not hotel_names:
         print('❌ No hotels to process')
         return []
@@ -675,194 +892,42 @@ def scrape_hotel_prices_from_booking_com():
         print('❌ No dates to process')
         return []
     
-    all_results = []
-    max_searches_per_session = 6
-    
     print(f'\n🚀 Starting scraper for {len(hotel_names)} hotels × {len(dates_list)} dates = {len(hotel_names) * len(dates_list)} total searches')
     
-    # Process each hotel
+    all_results = []
+    
+    # Sequential processing
     for hotel_idx, hotel_name in enumerate(hotel_names):
         print(f'\n{"="*60}')
         print(f'🏨 HOTEL {hotel_idx + 1}/{len(hotel_names)}: {hotel_name}')
         print(f'{"="*60}')
         
-        hotel_results = []
-        driver = None
-        search_count = 0
+        hotel_results = scrape_single_hotel_with_args(hotel_name, dates_list)
+        all_results.extend(hotel_results)
         
-        try:
-            # Process each date for this hotel
-            for date_idx, (checkin_date, checkout_date) in enumerate(dates_list):
-                try:
-                    # Create new session if needed
-                    if search_count % max_searches_per_session == 0 or driver is None:
-                        if driver:
-                            print(f'🔄 Restarting browser session...')
-                            try:
-                                driver.quit()
-                            except:
-                                pass
-                            time.sleep(5)
-                        
-                        print(f'🚀 Starting new browser session...')
-                        driver = create_driver_session()
-                        print('🔗 Connected to Bright Data')
-                        
-                        # Load Booking.com
-                        print('🌐 Loading Booking.com...')
-                        driver.get('https://www.booking.com/?cc1=co&selected_currency=COP')
-                        
-                        if not wait_for_page_load(driver):
-                            raise Exception("Page failed to load")
-                        
-                        time.sleep(5)
-                        ensure_no_blocking_modals(driver)
-                        print('✅ Page ready')
-                    
-                    print(f'\n📅 Date {date_idx + 1}/{len(dates_list)}: {checkin_date} → {checkout_date}')
-                    
-                    # Check WebSocket connection
-                    try:
-                        driver.current_url
-                    except Exception as e:
-                        if "cdp_ws_error" in str(e) or "WebSocket" in str(e):
-                            print('🔌 WebSocket lost, restarting...')
-                            driver = None
-                            continue
-                        else:
-                            raise e
-                                        
-                    # Step 1: Search for hotel
-                    if not search_and_click_on_hotel(driver, hotel_name):
-                        print(f'❌ Hotel search failed')
-                        hotel_results.append({
-                            'hotel_name': hotel_name,
-                            'checkin': str(checkin_date),
-                            'checkout': str(checkout_date),
-                            'price': None,
-                            'error': 'Hotel search failed',
-                            'availability': 'Search failed'
-                        })
-                        continue
-                    
-                    # Step 2: Select dates
-                    if not select_checkin_and_checkout_dates(driver, checkin_date, checkout_date):
-                        print(f'❌ Date selection failed')
-                        hotel_results.append({
-                            'hotel_name': hotel_name,
-                            'checkin': str(checkin_date),
-                            'checkout': str(checkout_date),
-                            'price': None,
-                            'error': 'Date selection failed',
-                            'availability': 'Date selection failed'
-                        })
-                        continue
-                    
-                    # Step 3: Click search
-                    if not click_on_search_button(driver):
-                        print(f'❌ Search execution failed')
-                        hotel_results.append({
-                            'hotel_name': hotel_name,
-                            'checkin': str(checkin_date),
-                            'checkout': str(checkout_date),
-                            'price': None,
-                            'error': 'Search execution failed',
-                            'availability': 'Search failed'
-                        })
-                        continue
-                    
-                    # Step 4: Check availability and extract price
-                    is_available, availability_message = check_hotel_availability(driver)
-                    
-                    if not is_available:
-                        print(f'❌ Not available: {availability_message}')
-                        hotel_results.append({
-                            'hotel_name': hotel_name,
-                            'checkin': str(checkin_date),
-                            'checkout': str(checkout_date),
-                            'price': None,
-                            'error': f'Not available: {availability_message}',
-                            'availability': 'Not available'
-                        })
-                    else:
-                        # Extract price
-                        price = extract_price(driver)
-                        if price and 'Not available' not in str(price):
-                            print(f'✅ Completed: {price}')
-                            hotel_results.append({
-                                'hotel_name': hotel_name,
-                                'checkin': str(checkin_date),
-                                'checkout': str(checkout_date),
-                                'price': price,
-                                'error': None,
-                                'availability': 'Available'
-                            })
-                        else:
-                            print(f'❌ Price extraction failed')
-                            hotel_results.append({
-                                'hotel_name': hotel_name,
-                                'checkin': str(checkin_date),
-                                'checkout': str(checkout_date),
-                                'price': None,
-                                'error': 'Price extraction failed',
-                                'availability': 'Price extraction failed'
-                            })
-                    
-                    search_count += 1
-                    
-                    # Wait between searches
-                    if date_idx < len(dates_list) - 1:
-                        print('⏸️ Waiting...')
-                        time.sleep(3)
-                
-                except Exception as e:
-                    error_msg = str(e)
-                    print(f'❌ Error: {error_msg}')
-                    
-                    if "cdp_ws_error" in error_msg or "WebSocket" in error_msg:
-                        driver = None
-                    
-                    hotel_results.append({
-                        'hotel_name': hotel_name,
-                        'checkin': str(checkin_date),
-                        'checkout': str(checkout_date),
-                        'price': None,
-                        'error': f'Exception: {error_msg}',
-                        'availability': 'Error'
-                    })
-            
-            # Add this hotel's results to all results
-            all_results.extend(hotel_results)
-            
-            # Print summary for this hotel
-            successful = len([r for r in hotel_results if r['price'] is not None])
-            print(f'\n📊 Summary for {hotel_name}:')
-            print(f'   ✅ Successful: {successful}/{len(hotel_results)}')
-            print(f'   ❌ Failed: {len(hotel_results) - successful}/{len(hotel_results)}')
-            
-        except Exception as e:
-            print(f'❌ Critical error for {hotel_name}: {str(e)}')
-        
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except:
-                    pass
-                driver = None
-        
-        # Wait between hotels
+        # Wait between hotels (if multiple)
         if hotel_idx < len(hotel_names) - 1:
             print(f'\n⏸️ Waiting before next hotel...')
             time.sleep(10)
     
     return all_results
 
-# Updated main function - only creates main CSV and summary CSV
-if __name__ == "__main__":
-    results = scrape_hotel_prices_from_booking_com()
+def main():
+    """Main function with argument parsing"""
+    args = parse_arguments()
+    
+    # Print configuration
+    print(f'🔧 CONFIGURATION:')
+    if args.hotel:
+        print(f'   🏨 Single hotel: {args.hotel}')
+    else:
+        print(f'   📁 Hotel file: {args.file}')
+    
+    # Run the scraper
+    results = scrape_hotels_with_args(args)
+    
     if results:
-        # Save to CSV files (main matrix and summary only)
+        # Save to CSV files
         main_csv = save_results_to_csv(results)
         summary_csv = create_price_summary_csv(results)
         
@@ -886,10 +951,13 @@ if __name__ == "__main__":
         
         print(f'\n📁 FILES CREATED:')
         if main_csv:
-            print(f'   📊 Main CSV (matrix format): {main_csv}')
+            print(f'   📊 Main CSV: {main_csv}')
         if summary_csv:
-            print(f'   📈 Summary CSV (statistics): {summary_csv}')
+            print(f'   📈 Summary CSV: {summary_csv}')
         
         print('\n✅ Scraping completed!')
     else:
         print('\n❌ No results to save')
+
+if __name__ == "__main__":
+    main()
