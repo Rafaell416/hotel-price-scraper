@@ -8,8 +8,9 @@ from dotenv import load_dotenv
 
 import time
 import os
-import csv
 import argparse
+import re
+import json
 
 load_dotenv()
 
@@ -232,7 +233,7 @@ def search_and_click_on_hotel(driver, hotel_name):
 
 def calculate_dates():
     start_date = datetime.now().date()
-    end_date = start_date + timedelta(days=30) #30
+    end_date = start_date + timedelta(days=2) #30
     dates = []
     current_date = start_date
     while current_date <= end_date:
@@ -435,188 +436,205 @@ def check_hotel_availability(driver):
         print(f"⚠️ Error checking availability: {e}")
         return True, "Could not determine availability"
 
-def save_results_to_csv(results, filename='hotel_prices.csv'):
-    """Save all results to a single CSV file with hotels as columns and dates as rows"""
-    try:
-        if not results:
-            print('❌ No results to save')
-            return
-        
-        # Get all unique hotels and dates
-        hotels = sorted(list(set([r['hotel_name'] for r in results])))
-        all_dates = sorted(list(set([(r['checkin'], r['checkout']) for r in results])))
-        
-        print(f'📊 Creating CSV with {len(hotels)} hotels and {len(all_dates)} date ranges')
-        
-        # Create CSV filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = f'hotel_prices_{timestamp}.csv'
-        
-        with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
-            # Create CSV writer
-            writer = csv.writer(csvfile)
-            
-            # Write header row
-            header = ['Check-in Date', 'Check-out Date', 'Date Range'] + hotels
-            writer.writerow(header)
-            
-            # Write data rows
-            for checkin_date, checkout_date in all_dates:
-                # Create date range string for better readability
-                date_range = f"{checkin_date} → {checkout_date}"
-                row = [checkin_date, checkout_date, date_range]
-                
-                # Add price for each hotel for this date range
-                for hotel in hotels:
-                    # Find the result for this hotel and date combination
-                    hotel_result = next(
-                        (r for r in results 
-                         if r['hotel_name'] == hotel 
-                         and r['checkin'] == checkin_date 
-                         and r['checkout'] == checkout_date), 
-                        None
-                    )
-                    
-                    if hotel_result:
-                        if hotel_result['price'] and hotel_result['price'] != 'None':
-                            # Clean price text (remove extra spaces, normalize format)
-                            price = str(hotel_result['price']).strip()
-                            if 'Not available' in price:
-                                row.append('N/A')
-                            else:
-                                row.append(price)
-                        else:
-                            # Determine the reason for no price
-                            if hotel_result['availability'] == 'Not available':
-                                row.append('N/A')
-                            elif hotel_result['error']:
-                                row.append('ERROR')
-                            else:
-                                row.append('N/A')
-                    else:
-                        row.append('NO DATA')
-                
-                writer.writerow(row)
-        
-        print(f'💾 CSV saved: {csv_filename}')
-        
-        # Print summary statistics
-        total_combinations = len(hotels) * len(all_dates)
-        successful_prices = len([r for r in results if r['price'] and 'Not available' not in str(r['price'])])
-        not_available = len([r for r in results if r['availability'] == 'Not available'])
-        errors = len([r for r in results if r['error']])
-        
-        print(f'\n📊 CSV SUMMARY:')
-        print(f'   🏨 Hotels: {len(hotels)}')
-        print(f'   📅 Date ranges: {len(all_dates)}')
-        print(f'   📊 Total combinations: {total_combinations}')
-        print(f'   ✅ Successful prices: {successful_prices}')
-        print(f'   ❌ Not available: {not_available}')
-        print(f'   🔧 Errors: {errors}')
-        print(f'   📈 Success rate: {(successful_prices/len(results)*100):.1f}%')
-        
-        # Print hotel list for reference
-        print(f'\n🏨 Hotels in CSV (columns):')
-        for i, hotel in enumerate(hotels, 1):
-            print(f'   {i}. {hotel}')
-            
-        return csv_filename
-        
-    except Exception as e:
-        print(f'❌ Error saving CSV: {str(e)}')
-        return None
+def clean_filename(text):
+    """Clean text to make it safe for filenames"""
+    # Replace spaces with underscores and remove special characters
+    cleaned = re.sub(r'[^\w\s-]', '', text)
+    cleaned = re.sub(r'[-\s]+', '_', cleaned)
+    return cleaned.lower()
 
-def create_price_summary_csv(results, filename_prefix='hotel_summary'):
-    """Create a summary CSV with aggregated statistics per hotel"""
+def save_results_to_json(results, hotel_name=None):
+    """Save results to JSON file with simplified structure"""
     try:
         if not results:
-            return
-            
+            print('❌ No results to save to JSON')
+            return None
+        
+        # Create JSON filename with timestamp and hotel name if provided
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_filename = f'{filename_prefix}_{timestamp}.csv'
         
-        # Group results by hotel
-        hotel_stats = {}
+        if hotel_name:
+            clean_hotel_name = clean_filename(hotel_name)
+            json_filename = f'{clean_hotel_name}_{timestamp}.json'
+        else:
+            json_filename = f'hotel_prices_{timestamp}.json'
         
-        for result in results:
-            hotel = result['hotel_name']
-            if hotel not in hotel_stats:
-                hotel_stats[hotel] = {
-                    'total_searches': 0,
-                    'successful_prices': 0,
-                    'not_available': 0,
-                    'errors': 0,
-                    'prices': [],
-                    'min_price': None,
-                    'max_price': None,
-                    'avg_price': None
+        # Check if it's a single hotel or multiple hotels
+        unique_hotels = list(set([r['hotel_name'] for r in results]))
+        is_single_hotel = len(unique_hotels) == 1
+        
+        if is_single_hotel:
+            # Simplified structure for single hotel
+            hotel_name_key = unique_hotels[0]
+            searches = []
+            summary = {
+                'total_searches': 0,
+                'successful_prices': 0,
+                'not_available': 0,
+                'errors': 0,
+                'success_rate': 0.0,
+                'prices': []
+            }
+            
+            for result in results:
+                # Add search result
+                search_data = {
+                    'checkin_date': result['checkin'],
+                    'checkout_date': result['checkout'],
+                    'date_range': f"{result['checkin']} → {result['checkout']}",
+                    'price': result['price'],
+                    'availability': result['availability'],
+                    'error': result['error'],
+                    'timestamp': datetime.now().isoformat()
                 }
+                
+                searches.append(search_data)
+                
+                # Update summary statistics
+                summary['total_searches'] += 1
+                
+                if result['price'] and 'Not available' not in str(result['price']):
+                    summary['successful_prices'] += 1
+                    # Extract numeric price for statistics
+                    try:
+                        price_str = str(result['price']).replace('COP', '').replace(',', '').strip()
+                        price_num = float(''.join(filter(str.isdigit, price_str)))
+                        summary['prices'].append(price_num)
+                    except:
+                        pass
+                elif result['availability'] == 'Not available':
+                    summary['not_available'] += 1
+                else:
+                    summary['errors'] += 1
             
-            stats = hotel_stats[hotel]
-            stats['total_searches'] += 1
+            # Calculate final statistics
+            if summary['total_searches'] > 0:
+                summary['success_rate'] = (summary['successful_prices'] / summary['total_searches']) * 100
             
-            if result['price'] and 'Not available' not in str(result['price']):
-                stats['successful_prices'] += 1
-                # Extract numeric value from price string
-                price_str = str(result['price']).replace('COP', '').replace(',', '').strip()
-                try:
-                    price_num = float(''.join(filter(str.isdigit, price_str)))
-                    stats['prices'].append(price_num)
-                except:
-                    pass
-            elif result['availability'] == 'Not available':
-                stats['not_available'] += 1
+            if summary['prices']:
+                summary['min_price'] = min(summary['prices'])
+                summary['max_price'] = max(summary['prices'])
+                summary['avg_price'] = sum(summary['prices']) / len(summary['prices'])
             else:
-                stats['errors'] += 1
-        
-        # Calculate price statistics
-        for hotel, stats in hotel_stats.items():
-            if stats['prices']:
-                stats['min_price'] = min(stats['prices'])
-                stats['max_price'] = max(stats['prices'])
-                stats['avg_price'] = sum(stats['prices']) / len(stats['prices'])
-        
-        # Write summary CSV
-        with open(summary_filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
+                summary['min_price'] = None
+                summary['max_price'] = None
+                summary['avg_price'] = None
             
-            # Header
-            header = [
-                'Hotel Name', 'Total Searches', 'Successful Prices', 'Not Available', 
-                'Errors', 'Success Rate (%)', 'Min Price (COP)', 'Max Price (COP)', 
-                'Avg Price (COP)', 'Price Range'
-            ]
-            writer.writerow(header)
+            # Create simplified JSON structure for single hotel
+            json_data = {
+                'metadata': {
+                    'scrape_timestamp': datetime.now().isoformat(),
+                    'hotel_name': hotel_name_key,
+                    'total_searches': len(results),
+                    'total_successful': summary['successful_prices'],
+                    'overall_success_rate': summary['success_rate']
+                },
+                'hotel_name': hotel_name_key,
+                'searches': searches,
+                'summary': summary
+            }
             
-            # Data rows
-            for hotel, stats in hotel_stats.items():
-                success_rate = (stats['successful_prices'] / stats['total_searches'] * 100) if stats['total_searches'] > 0 else 0
+        else:
+            # Keep nested structure for multiple hotels
+            hotels_data = {}
+            
+            for result in results:
+                hotel_name_key = result['hotel_name']
+                if hotel_name_key not in hotels_data:
+                    hotels_data[hotel_name_key] = {
+                        'hotel_name': hotel_name_key,
+                        'searches': [],
+                        'summary': {
+                            'total_searches': 0,
+                            'successful_prices': 0,
+                            'not_available': 0,
+                            'errors': 0,
+                            'success_rate': 0.0,
+                            'prices': []
+                        }
+                    }
                 
-                min_price_str = f"{stats['min_price']:,.0f}" if stats['min_price'] else 'N/A'
-                max_price_str = f"{stats['max_price']:,.0f}" if stats['max_price'] else 'N/A'
-                avg_price_str = f"{stats['avg_price']:,.0f}" if stats['avg_price'] else 'N/A'
+                # Add search result
+                search_data = {
+                    'checkin_date': result['checkin'],
+                    'checkout_date': result['checkout'],
+                    'date_range': f"{result['checkin']} → {result['checkout']}",
+                    'price': result['price'],
+                    'availability': result['availability'],
+                    'error': result['error'],
+                    'timestamp': datetime.now().isoformat()
+                }
                 
-                price_range = f"{min_price_str} - {max_price_str}" if stats['min_price'] and stats['max_price'] else 'N/A'
+                hotels_data[hotel_name_key]['searches'].append(search_data)
                 
-                row = [
-                    hotel,
-                    stats['total_searches'],
-                    stats['successful_prices'],
-                    stats['not_available'],
-                    stats['errors'],
-                    f"{success_rate:.1f}%",
-                    min_price_str,
-                    max_price_str,
-                    avg_price_str,
-                    price_range
-                ]
-                writer.writerow(row)
+                # Update summary statistics
+                summary = hotels_data[hotel_name_key]['summary']
+                summary['total_searches'] += 1
+                
+                if result['price'] and 'Not available' not in str(result['price']):
+                    summary['successful_prices'] += 1
+                    # Extract numeric price for statistics
+                    try:
+                        price_str = str(result['price']).replace('COP', '').replace(',', '').strip()
+                        price_num = float(''.join(filter(str.isdigit, price_str)))
+                        summary['prices'].append(price_num)
+                    except:
+                        pass
+                elif result['availability'] == 'Not available':
+                    summary['not_available'] += 1
+                else:
+                    summary['errors'] += 1
+            
+            # Calculate final statistics for each hotel
+            for hotel_name_key, hotel_data in hotels_data.items():
+                summary = hotel_data['summary']
+                if summary['total_searches'] > 0:
+                    summary['success_rate'] = (summary['successful_prices'] / summary['total_searches']) * 100
+                
+                if summary['prices']:
+                    summary['min_price'] = min(summary['prices'])
+                    summary['max_price'] = max(summary['prices'])
+                    summary['avg_price'] = sum(summary['prices']) / len(summary['prices'])
+                else:
+                    summary['min_price'] = None
+                    summary['max_price'] = None
+                    summary['avg_price'] = None
+            
+            # Create nested JSON structure for multiple hotels
+            json_data = {
+                'metadata': {
+                    'scrape_timestamp': datetime.now().isoformat(),
+                    'total_hotels': len(hotels_data),
+                    'total_searches': len(results),
+                    'total_successful': sum(h['summary']['successful_prices'] for h in hotels_data.values()),
+                    'overall_success_rate': (sum(h['summary']['successful_prices'] for h in hotels_data.values()) / len(results)) * 100 if results else 0
+                },
+                'hotels': hotels_data
+            }
         
-        print(f'📊 Summary CSV saved: {summary_filename}')
-        return summary_filename
+        # Save JSON file
+        with open(json_filename, 'w', encoding='utf-8') as jsonfile:
+            json.dump(json_data, jsonfile, indent=2, ensure_ascii=False)
+        
+        print(f'💾 JSON saved: {json_filename}')
+        
+        # Print JSON summary
+        print(f'\n📊 JSON SUMMARY:')
+        if is_single_hotel:
+            print(f'   🏨 Hotel: {json_data["hotel_name"]}')
+            print(f'   📊 Total searches: {json_data["metadata"]["total_searches"]}')
+            print(f'   ✅ Successful: {json_data["metadata"]["total_successful"]}')
+            print(f'   📈 Success rate: {json_data["metadata"]["overall_success_rate"]:.1f}%')
+        else:
+            print(f'   🏨 Hotels: {json_data["metadata"]["total_hotels"]}')
+            print(f'   📊 Total searches: {json_data["metadata"]["total_searches"]}')
+            print(f'   ✅ Successful: {json_data["metadata"]["total_successful"]}')
+            print(f'   📈 Success rate: {json_data["metadata"]["overall_success_rate"]:.1f}%')
+        
+        return json_filename
         
     except Exception as e:
-        print(f'❌ Error creating summary CSV: {str(e)}')
+        print(f'❌ Error saving JSON: {str(e)}')
         return None
 
 def load_hotel_names(filename='hotel_names.txt'):
@@ -841,6 +859,7 @@ def scrape_single_hotel_with_args(hotel_name, dates_list):
                 # Wait between searches
                 if date_idx < len(dates_list) - 1:
                     print('⏸️ Waiting...')
+                    print('\n')
                     time.sleep(3)
             
             except Exception as e:
@@ -927,9 +946,13 @@ def main():
     results = scrape_hotels_with_args(args)
     
     if results:
-        # Save to CSV files
-        main_csv = save_results_to_csv(results)
-        summary_csv = create_price_summary_csv(results)
+        # Save to JSON only
+        if args.hotel:
+            # Single hotel mode - use hotel name in filename
+            json_file = save_results_to_json(results, hotel_name=args.hotel)
+        else:
+            # Multiple hotels from file - use default naming
+            json_file = save_results_to_json(results)
         
         # Print final summary
         hotels = list(set([r['hotel_name'] for r in results]))
@@ -949,11 +972,9 @@ def main():
             hotel_successful = len([r for r in hotel_results if r['price'] is not None and 'Not available' not in str(r['price'])])
             print(f'   🏨 {hotel}: {hotel_successful}/{len(hotel_results)} successful')
         
-        print(f'\n📁 FILES CREATED:')
-        if main_csv:
-            print(f'   📊 Main CSV: {main_csv}')
-        if summary_csv:
-            print(f'   📈 Summary CSV: {summary_csv}')
+        print(f'\n📁 FILE CREATED:')
+        if json_file:
+            print(f'   📋 JSON Data: {json_file}')
         
         print('\n✅ Scraping completed!')
     else:
