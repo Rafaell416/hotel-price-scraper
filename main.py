@@ -444,20 +444,26 @@ def clean_filename(text):
     return cleaned.lower()
 
 def save_results_to_json(results, hotel_name=None):
-    """Save results to JSON file with simplified structure"""
+    """Save results to JSON file with simplified structure inside outputs folder"""
     try:
         if not results:
             print('❌ No results to save to JSON')
             return None
+        
+        # Create outputs folder if it doesn't exist
+        output_folder = 'outputs'
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+            print(f'📁 Created outputs folder: {output_folder}')
         
         # Create JSON filename with timestamp and hotel name if provided
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if hotel_name:
             clean_hotel_name = clean_filename(hotel_name)
-            json_filename = f'{clean_hotel_name}_{timestamp}.json'
+            json_filename = os.path.join(output_folder, f'{clean_hotel_name}_{timestamp}.json')
         else:
-            json_filename = f'hotel_prices_{timestamp}.json'
+            json_filename = os.path.join(output_folder, f'hotel_prices_{timestamp}.json')
         
         # Check if it's a single hotel or multiple hotels
         unique_hotels = list(set([r['hotel_name'] for r in results]))
@@ -827,7 +833,7 @@ def scrape_single_hotel_with_args(hotel_name, dates_list):
                         'checkin': str(checkin_date),
                         'checkout': str(checkout_date),
                         'price': None,
-                        'error': f'Not available: {availability_message}',
+                        'error': None,  # ✅ No error - just unavailable
                         'availability': 'Not available'
                     })
                 else:
@@ -850,7 +856,7 @@ def scrape_single_hotel_with_args(hotel_name, dates_list):
                             'checkin': str(checkin_date),
                             'checkout': str(checkout_date),
                             'price': None,
-                            'error': 'Price extraction failed',
+                            'error': 'Price extraction failed',  # ✅ This IS an error
                             'availability': 'Price extraction failed'
                         })
                 
@@ -874,7 +880,7 @@ def scrape_single_hotel_with_args(hotel_name, dates_list):
                     'checkin': str(checkin_date),
                     'checkout': str(checkout_date),
                     'price': None,
-                    'error': f'Exception: {error_msg}',
+                    'error': f'Exception: {error_msg}',  # ✅ This IS an error
                     'availability': 'Error'
                 })
         
